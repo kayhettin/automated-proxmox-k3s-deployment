@@ -15,16 +15,16 @@ This repository provisions a Highly Available (HA) Kubernetes (K3s) cluster dist
 * `ansible.cfg`: Disables strict host key checking to prevent stalls on newly provisioned VMs.
 * `scripts/01-setup-openwrt.sh`: Defines the flat network, DHCP scopes, and firewall zones on the routing layer.
 * `scripts/02-push-keys.sh`: Automates distribution of the public SSH key to all physical and virtual nodes.
-* `playbooks/01-build-template.yml`: Idempotent playbook that downloads the Rocky Linux 9 cloud image and converts it to a Proxmox template backed by the Synology NFS share[cite: 1].
-* `playbooks/02-prep-nodes.yml`: Disables SWAP/Firewalld, configures SELinux, and sets kernel routing parameters[cite: 1].
-* `playbooks/03-install-k3s.yml`: Bootstraps the HA embedded etcd control plane, joins workers, and fetches the `kubeconfig`[cite: 1].
+* `playbooks/01-build-template.yml`: Idempotent playbook that downloads the Rocky Linux 9 cloud image and converts it to a Proxmox template backed by the Synology NFS share.
+* `playbooks/02-prep-nodes.yml`: Disables SWAP/Firewalld, configures SELinux, and sets kernel routing parameters.
+* `playbooks/03-install-k3s.yml`: Bootstraps the HA embedded etcd control plane, joins workers, and fetches the `kubeconfig`.
 
 ## Deployment Instructions
 1. **Environment Setup:** Copy `.env.example` to `.env` and populate it with your specific SSH public key and a securely generated `K3S_TOKEN`.
 2. **Network Initialization:** Run `scripts/01-setup-openwrt.sh` on your OpenWrt gateway to establish DHCP boundaries and VLAN definitions.
 3. **Key Distribution:** Execute `scripts/02-push-keys.sh` from your Ansible node to distribute the Ed25519 key to the bare-metal Proxmox hosts. 
-4. **Golden Image Creation:** Run `ansible-playbook playbooks/01-build-template.yml` to generate the Rocky 9 base template (VM ID `9000`) on Proxmox[cite: 1].
-5. **Node Cloning:** Manually full-clone VM `9000` six times in Proxmox. Distribute the clones sequentially across your physical hypervisors to avoid NFS saturation[cite: 1]. Use the Cloud-Init tab to assign static IPs (`10.10.0.21` - `10.10.0.26`), regenerate the image, and boot[cite: 1].
+4. **Golden Image Creation:** Run `ansible-playbook playbooks/01-build-template.yml` to generate the Rocky 9 base template (VM ID `9000`) on Proxmox.
+5. **Node Cloning:** Manually full-clone VM `9000` six times in Proxmox. Distribute the clones sequentially across your physical hypervisors to avoid NFS saturation. Use the Cloud-Init tab to assign static IPs (`10.10.0.21` - `10.10.0.26`), regenerate the image, and boot.
 6. **OS Preparation:** Run `ansible-playbook playbooks/02-prep-nodes.yml` to configure the kernel and security layers on the new clones.
 7. **Cluster Deployment:** Run `ansible-playbook playbooks/03-install-k3s.yml` to form the cluster and retrieve credentials.
 
