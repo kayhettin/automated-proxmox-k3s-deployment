@@ -1,0 +1,57 @@
+---
+- name: Phase 3 - Install K3s HA Cluster
+  hosts: k3s_cluster
+  become: yes
+  vars:
+    k3s_token: "{{ lookup('env', 'K3S_TOKEN') }}"
+
+  tasks:
+    - name: Initialize the First Control Plane Node (etcd HA)
+      when: inventory_hostname in groups['k3s_init']
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | sh -s - server \
+          --cluster-init \
+          --token {{ k3s_token }} \
+          --disable servicelb \
+          --disable traefik \
+          --node-ip {{ ansible_host }}
+      args:
+        creates: /etc/rancher/k3s/k3s.yaml
+
+    - name: Join the Remaining Control Plane Nodes
+      when: inventory_hostname in groups['k3s_cp']
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | sh -s - server \
+          --server https://10.10.0.21:6443 \
+          --token {{ k3s_token }} \
+          --disable servicelb \
+          --disable traefik \
+          --node-ip {{ ansible_host }}
+      args:
+        creates: /etc/rancher/k3s/k3s.yaml
+
+    - name: Join the Worker Nodes
+      when: inventory_hostname in groups['k3s_workers']
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://10.10.0.21:6443 K3S_TOKEN={{ k3s_token }} sh -s - \
+          --node-ip {{ ansible_host }}
+      args:
+        creates: /etc/systemd/system/k3s-agent.service
+
+- name: Retrieve Kubeconfig to Ansible Control Node
+  hosts: k3s_init
+  become: yes
+  tasks:
+    - name: Fetch kubeconfig file from cp1
+      ansible.builtin.fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: ~/.kube/config
+        flat: yes
+
+    - name: Update kubeconfig IP address (Replace localhost with cp1 IP)
+      delegate_to: localhost
+      become: no
+      ansible.builtin.replace:
+        path: ~/.kube/config
+        regexp: '127\.0\.0\.1'
+        replace: '10.10.0.21'

@@ -1,0 +1,92 @@
+---
+- name: Phase 2 - Prepare Rocky Linux 9 for K3s
+  hosts: k3s_cluster
+  become: yes
+  tasks:
+    - name: Upgrade all system packages
+      ansible.builtin.dnf:
+        name: "*"
+        state: latest
+
+    - name: Install required baseline packages
+      ansible.builtin.dnf:
+        name:
+          - curl
+          - tar
+          - qemu-guest-agent
+          - iscsi-initiator-utils
+          - iproute-tc
+          - iptables
+        state: present
+
+    - name: Ensure QEMU Guest Agent is running
+      ansible.builtin.systemd:
+        name: qemu-guest-agent
+        state: started
+        enabled: yes
+
+    - name: Disable firewalld (K3s must manage iptables directly)
+      ansible.builtin.systemd:
+        name: firewalld
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Set SELinux to permissive
+      ansible.posix.selinux:
+        policy: targeted
+        state: permissive
+      ignore_errors: yes
+
+    - name: Fallback - Set SELinux to permissive via command line
+      ansible.builtin.command: setenforce 0
+      failed_when: false
+      changed_when: false
+
+    - name: Fallback - Disable SELinux permanently in config
+      ansible.builtin.replace:
+        path: /etc/selinux/config
+        regexp: '^SELINUX=enforcing'
+        replace: 'SELINUX=permissive'
+
+    - name: Disable SWAP in fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#].*?\s+swap\s+sw\s+.*)$'
+        replace: '# \1'
+
+    - name: Disable SWAP immediately
+      ansible.builtin.command: swapoff -a
+      changed_when: false
+
+    - name: Load required kernel modules for K3s
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+        mode: '0644'
+
+    - name: Instantly load kernel modules
+      ansible.builtin.command: modprobe {{ item }}
+      loop:
+        - overlay
+        - br_netfilter
+      changed_when: false
+
+    - name: Configure sysctl for Kubernetes networking
+      ansible.posix.sysctl:
+        name: "{{ item }}"
+        value: '1'
+        state: present
+        sysctl_set: yes
+        reload: yes
+      loop:
+        - net.ipv4.ip_forward
+        - net.bridge.bridge-nf-call-iptables
+        - net.bridge.bridge-nf-call-ip6tables
+
+    - name: Reboot nodes to apply kernel updates and SELinux states
+      ansible.builtin.reboot:
+        msg: "Rebooting for K3s OS preparation"
+        reboot_timeout: 300

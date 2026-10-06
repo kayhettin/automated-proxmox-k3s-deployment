@@ -1,0 +1,83 @@
+---
+- name: Build Rocky Linux 9 Golden Image Template
+  hosts: pve
+  become: yes
+  vars:
+    vmid: 9000
+    template_name: "rocky9-k3s-template"
+    storage_pool: "kayology-vms"
+    ssh_pub_key: "{{ lookup('env', 'SSH_PUB_KEY') }}"
+    image_url: "https://dl.rockylinux.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2"
+    image_dest: "/tmp/rocky9.qcow2"
+    ssh_key_file: "/tmp/ansible.pub"
+
+  tasks:
+    - name: Check if VM template already exists
+      ansible.builtin.command: qm status {{ vmid }}
+      register: vm_status
+      failed_when: false
+      changed_when: false
+
+    - name: Download Rocky Linux 9 Cloud Image
+      ansible.builtin.get_url:
+        url: "{{ image_url }}"
+        dest: "{{ image_dest }}"
+        mode: '0644'
+      when: vm_status.rc != 0
+
+    - name: Create the base VM structure
+      ansible.builtin.command: >
+        qm create {{ vmid }} --name "{{ template_name }}" --ostype l26
+        --memory 2048 --agent 1
+        --bios ovmf --machine q35 --efidisk0 {{ storage_pool }}:0,pre-enrolled-keys=0
+        --cpu host --socket 1 --cores 2
+        --vga serial0 --serial0 socket
+        --net0 virtio,bridge=vmbr0
+      when: vm_status.rc != 0
+
+    - name: Import disk directly to SCSI controller
+      ansible.builtin.command: >
+        qm set {{ vmid }} --scsihw virtio-scsi-single
+        --scsi0 {{ storage_pool }}:0,import-from={{ image_dest }},discard=on,ssd=1
+      when: vm_status.rc != 0
+
+    - name: Add Cloud-Init CD-ROM drive
+      ansible.builtin.command: qm set {{ vmid }} --ide2 {{ storage_pool }}:cloudinit
+      when: vm_status.rc != 0
+
+    - name: Set boot order and resize disk to 40GB
+      ansible.builtin.shell: |
+        qm set {{ vmid }} --boot order=scsi0
+        qm disk resize {{ vmid }} scsi0 40G
+      when: vm_status.rc != 0
+
+    - name: Write SSH public key to temporary file
+      ansible.builtin.copy:
+        content: "{{ ssh_pub_key }}"
+        dest: "{{ ssh_key_file }}"
+        mode: '0644'
+      when: vm_status.rc != 0
+
+    - name: Configure Cloud-Init parameters
+      ansible.builtin.command: >
+        qm set {{ vmid }}
+        --ciuser kube-admin
+        --sshkeys {{ ssh_key_file }}
+        --ipconfig0 ip=dhcp
+      when: vm_status.rc != 0
+
+    - name: Convert VM to Template (Ignoring NFS chattr errors)
+      ansible.builtin.command: qm template {{ vmid }}
+      register: template_result
+      failed_when: 
+        - template_result.rc != 0
+        - "'chattr' not in template_result.stderr"
+      when: vm_status.rc != 0
+
+    - name: Clean up temporary files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ image_dest }}"
+        - "{{ ssh_key_file }}"
